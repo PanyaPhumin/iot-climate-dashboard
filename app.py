@@ -230,7 +230,32 @@ def delete_room_data():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 🟢 ลอจิก SQL: ลบข้อมูลประวัติของห้องนี้ทั้งหมด "ยกเว้น" แถวที่มี ID ใหม่ล่าสุด (เวลาใกล้ปัจจุบันสุด)
+        # 🟢 1. ก่อนจะลบประวัติ มาคำนวณก่อนว่าใน "ห้องที่จะลบ" มีการกดปุ่มช่วงไหนไปแล้วบ้าง
+        # เพื่อเอาจำนวนครั้งไปหักออกจากตารางนับยอดสะสม (button_stats) ให้สถิติมันลดลงตามจริง
+        cur.execute('''
+            SELECT 
+                COUNT(CASE WHEN heat_index >= 27 AND heat_index < 32 THEN 1 END) as caution_count,
+                COUNT(CASE WHEN heat_index >= 32 AND heat_index < 41 THEN 1 END) as extreme_count,
+                COUNT(CASE WHEN heat_index >= 41 AND heat_index <= 54 THEN 1 END) as danger_count
+            FROM climate_logs
+            WHERE room_name = %s AND button_pressed = 1
+            AND id NOT IN (
+                SELECT id FROM climate_logs WHERE room_name = %s ORDER BY timestamp DESC LIMIT 1
+            );
+        ''', (room_name, room_name))
+        
+        counts = cur.fetchone() # ดึงยอดที่กำลังจะโดนลบออกมา
+        
+        # 🟢 2. เอาจำนวนครั้งไป ลบหักยอด (UPDATE) ออกจากตารางสถิติปุ่มกดสะสม
+        if counts:
+            if counts[0] > 0: # หักลบช่วง caution
+                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'caution\';', (counts[0],))
+            if counts[1] > 0: # หักลบช่วง extreme_caution
+                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'extreme_caution\';', (counts[1],))
+            if counts[2] > 0: # หักลบช่วง danger
+                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'danger\';', (counts[2],))
+
+        # 🟢 3. สั่งลบข้อมูลประวัติในตารางหลัก (โค้ดเดิม)
         cur.execute('''
             DELETE FROM climate_logs 
             WHERE room_name = %s 
@@ -246,10 +271,11 @@ def delete_room_data():
         cur.close()
         conn.close()
         
-        print(f"🧹 [Database] Cleared history for room: {room_name}, keeping the latest entry.")
-        return jsonify({"status": "success", "message": f"Cleared history for {room_name}"}), 200
+        print(f"🧹 [Database] Cleared history for {room_name} and recalculated button stats.")
+        return jsonify({"status": "success", "message": f"Cleared history and updated stats for {room_name}"}), 200
         
     except Exception as e:
+        if conn: conn.rollback() # ถ้าทำงานพลาดให้ย้อนกลับสถานะเดิมเพื่อความปลอดภัย
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == '__main__':
