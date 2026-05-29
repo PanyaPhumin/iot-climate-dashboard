@@ -105,11 +105,15 @@ async function updateDashboardData() {
 
             const isSelected = roomName === currentSelectedRoom ? "style='box-shadow: 0 0 10px rgba(30,41,59,0.3); transform: scale(1.02);'" : "";
 
+            // 🟢 ปรับปรุง Code HTML ของการ์ด: เพิ่มปุ่มถังขยะลบข้อมูลประวัติ
             const cardHtml = `
-                <div class="room-card" ${isSelected} onclick="selectRoom('${roomName}')" style="border-top: 5px solid ${cardBorderColor}; cursor: pointer;">
-                    <div class="room-header">
+                <div class="room-card" ${isSelected} onclick="selectRoom('${roomName}')" style="border-top: 5px solid ${cardBorderColor}; cursor: pointer; position: relative;">
+                    <div class="room-header" style="display: flex; justify-content: space-between; align-items: center;">
                         <h3>🏠 ${roomName}</h3>
-                        <span class="badge ${badgeClass}">${badgeText}</span>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="badge ${badgeClass}">${badgeText}</span>
+                            <button onclick="deleteRoomData(event, '${roomName}')" style="background: none; border: none; cursor: pointer; font-size: 1.1rem; padding: 4px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.2)'" onmouseout="this.style.transform='scale(1)'" title="ล้างข้อมูลประวัติห้องนี้">🗑️</button>
+                        </div>
                     </div>
                     <div class="room-body">
                         <div class="data-row"><span>อุณหภูมิ:</span> <strong>${roomValue.temp} °C</strong></div>
@@ -186,6 +190,39 @@ async function refreshLineChart() {
         climateChart.update();
     } catch (e) {
         console.error(e);
+    }
+}
+
+async function deleteRoomData(event, roomName) {
+    // ป้องกันไม่ให้ระบบไปคลิกเลือกการ์ดห้องสลับหน้ากราฟตอนกดปุ่มลบ
+    event.stopPropagation(); 
+    
+    // แจ้งเตือนยืนยันก่อนลบจริง
+    if (!confirm(`คุณแน่ใจใช่ไหมที่จะลบประวัติข้อมูลทั้งหมดของ "ห้อง ${roomName}"? (จะเหลือไว้เพียงค่าล่าสุดเท่านั้น)`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/delete_room_data', {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ room_name: roomName })
+        });
+
+        const result = await response.json();
+        
+        if (response.ok) {
+            alert(`ล้างข้อมูลประวัติของห้อง ${roomName} เรียบร้อยแล้ว!`);
+            // สั่งอัปเดตหน้าจอและพล็อตเส้นกราฟใหม่ทันที
+            updateDashboardData();
+        } else {
+            alert(`เกิดข้อผิดพลาด: ${result.message}`);
+        }
+    } catch (error) {
+        console.error("Error deleting room data:", error);
+        alert("ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์เพื่อลบข้อมูลได้");
     }
 }
 

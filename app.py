@@ -218,5 +218,39 @@ def get_data():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/delete_room_data', methods=['DELETE'])
+def delete_room_data():
+    data = request.json
+    if not data or 'room_name' not in data:
+        return jsonify({"status": "error", "message": "Missing room_name"}), 400
+        
+    room_name = data.get('room_name')
+    
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # 🟢 ลอจิก SQL: ลบข้อมูลประวัติของห้องนี้ทั้งหมด "ยกเว้น" แถวที่มี ID ใหม่ล่าสุด (เวลาใกล้ปัจจุบันสุด)
+        cur.execute('''
+            DELETE FROM climate_logs 
+            WHERE room_name = %s 
+            AND id NOT IN (
+                SELECT id FROM climate_logs 
+                WHERE room_name = %s 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            );
+        ''', (room_name, room_name))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        print(f"🧹 [Database] Cleared history for room: {room_name}, keeping the latest entry.")
+        return jsonify({"status": "success", "message": f"Cleared history for {room_name}"}), 200
+        
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
