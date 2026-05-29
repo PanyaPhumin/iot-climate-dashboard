@@ -166,7 +166,7 @@ async function refreshLineChart() {
     document.getElementById('line-chart-title').innerText = `📈 แนวโน้มสภาพอากาศ: ห้อง ${currentSelectedRoom}`;
 
     try {
-        const response = await fetch('/api/get_data');
+        const response = await fetch(`/api/get_data?room=${encodeURIComponent(currentSelectedRoom)}`);
         const data = await response.json();
         
         climateChart.data.labels = data.chart_timeline;

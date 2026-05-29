@@ -17,11 +17,12 @@ def get_db_connection():
 
 def init_db():
     """🟢 2. ฟังก์ชันสร้างตารางเก็บข้อมูลทดแทนไฟล์ Excel อัตโนมัติเมื่อเปิดเซิร์ฟเวอร์ครั้งแรก"""
+    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # สร้างตารางประวัติสภาพอากาศ (ทดแทนแผ่นงานหลัก in Excel)
+        # สร้างตารางประวัติสภาพอากาศ (ทดแทนแผ่นงานหลักใน Excel)
         cur.execute('''
             CREATE TABLE IF NOT EXISTS climate_logs (
                 id SERIAL PRIMARY KEY,
@@ -51,10 +52,14 @@ def init_db():
         
         conn.commit()
         cur.close()
-        conn.close()
         print("✨ [Database] initialized and tables are ready.")
     except Exception as e:
-        print(f"⚠️ [Database Init Warning]: {str(e)}")
+        if conn:
+            conn.rollback()  # ย้อนกลับคำสั่งหากเกิดข้อผิดพลาดในตารางคลาวด์
+        print(f"⚠️ [Database Init Error]: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
 
 # 🌟 🟢 ดึงคำสั่ง init_db ออกมานอก __main__ เพื่อให้ทำงานอย่างถูกต้องเมื่ออยู่บน Render (Gunicorn)
 init_db()
@@ -217,7 +222,7 @@ def get_data():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
+        
 @app.route('/api/delete_room_data', methods=['DELETE'])
 def delete_room_data():
     data = request.json
@@ -225,13 +230,13 @@ def delete_room_data():
         return jsonify({"status": "error", "message": "Missing room_name"}), 400
         
     room_name = data.get('room_name')
+    conn = None
     
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 🟢 1. ก่อนจะลบประวัติ มาคำนวณก่อนว่าใน "ห้องที่จะลบ" มีการกดปุ่มช่วงไหนไปแล้วบ้าง
-        # เพื่อเอาจำนวนครั้งไปหักออกจากตารางนับยอดสะสม (button_stats) ให้สถิติมันลดลงตามจริง
+        # 🟢 ล็อกเป้าแก้บั๊ก: นับสถิติจำนวนปุ่มกดของห้องนี้ "เฉพาะแถวที่กำลังจะโดนลบจริงๆ"
         cur.execute('''
             SELECT 
                 COUNT(CASE WHEN heat_index >= 27 AND heat_index < 32 THEN 1 END) as caution_count,
@@ -244,39 +249,37 @@ def delete_room_data():
             );
         ''', (room_name, room_name))
         
-        counts = cur.fetchone() # ดึงยอดที่กำลังจะโดนลบออกมา
+        counts = cur.fetchone()
         
-        # 🟢 2. เอาจำนวนครั้งไป ลบหักยอด (UPDATE) ออกจากตารางสถิติปุ่มกดสะสม
+        # หักยอดออกจากตารางสถิติปุ่มกดสะสมตามจำนวนที่นับได้จริง
         if counts:
-            if counts[0] > 0: # หักลบช่วง caution
+            if counts[0] > 0:
                 cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'caution\';', (counts[0],))
-            if counts[1] > 0: # หักลบช่วง extreme_caution
+            if counts[1] > 0:
                 cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'extreme_caution\';', (counts[1],))
-            if counts[2] > 0: # หักลบช่วง danger
+            if counts[2] > 0:
                 cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'danger\';', (counts[2],))
 
-        # 🟢 3. สั่งลบข้อมูลประวัติในตารางหลัก (โค้ดเดิม)
+        # 🟢 สั่งลบข้อมูลประวัติโดยล็อกชื่อห้องใน Subquery ให้ถูกต้อง
         cur.execute('''
             DELETE FROM climate_logs 
             WHERE room_name = %s 
             AND id NOT IN (
-                SELECT id FROM climate_logs 
-                WHERE room_name = %s 
-                ORDER BY timestamp DESC 
-                LIMIT 1
+                SELECT id FROM climate_logs WHERE room_name = %s ORDER BY timestamp DESC LIMIT 1
             );
         ''', (room_name, room_name))
         
         conn.commit()
         cur.close()
-        conn.close()
         
-        print(f"🧹 [Database] Cleared history for {room_name} and recalculated button stats.")
-        return jsonify({"status": "success", "message": f"Cleared history and updated stats for {room_name}"}), 200
+        print(f"🧹 [Database] Cleared history for {room_name} and fixed button stats correctly.")
+        return jsonify({"status": "success", "message": "Cleared history and recalculated stats"}), 200
         
     except Exception as e:
-        if conn: conn.rollback() # ถ้าทำงานพลาดให้ย้อนกลับสถานะเดิมเพื่อความปลอดภัย
+        if conn: conn.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn: conn.close()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
