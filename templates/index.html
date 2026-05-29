@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Multi-Room Climate Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+</head>
+<body>
+
+    <header class="navbar">
+        <div class="logo">🌡️ IoT Climate Monitor (Multi-Room)</div>
+        <div class="system-status">สถานะเซิร์ฟเวอร์: <span class="status-online">Online</span></div>
+    </header>
+
+    <div class="container">
+        
+        <h2 class="section-title">📊 สภาพอากาศเรียลไทม์ <span style="font-size: 0.9rem; color: #64748b;">(คลิกเลือกการ์ดห้องเพื่อดูแนวโน้มกราฟ)</span></h2>
+        <div class="room-grid" id="room-container">
+        </div>
+
+        <div class="chart-grid">
+            
+            <div class="chart-card">
+                <div class="chart-header-actions">
+                    <div>
+                        <h3 id="line-chart-title">📈 แนวโน้มสภาพอากาศ: กำลังโหลด...</h3>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn-toggle active" onclick="switchDataType('hi')">Heat Index</button>
+                        <button class="btn-toggle" onclick="switchDataType('temp')">อุณหภูมิ</button>
+                        <button class="btn-toggle" onclick="switchDataType('humi')">ความชื้น</button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="climateLineChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-card">
+                <h3>🚨 สถิติการกดปุ่มแจ้งเตือนความร้อน (รวมทุกห้อง)</h3>
+                <p class="chart-sub">เปรียบเทียบจำนวนครั้งที่กดปุ่ม แยกตามระดับ Heat Index จากข้อมูลทั้งหมดใน Excel</p>
+                <div class="chart-container">
+                    <canvas id="buttonClickBarChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
