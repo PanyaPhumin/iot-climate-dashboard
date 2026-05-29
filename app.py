@@ -222,7 +222,7 @@ def get_data():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-        
+
 @app.route('/api/delete_room_data', methods=['DELETE'])
 def delete_room_data():
     data = request.json
@@ -236,31 +236,7 @@ def delete_room_data():
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # 🟢 ล็อกเป้าแก้บั๊ก: นับสถิติจำนวนปุ่มกดของห้องนี้ "เฉพาะแถวที่กำลังจะโดนลบจริงๆ"
-        cur.execute('''
-            SELECT 
-                COUNT(CASE WHEN heat_index >= 27 AND heat_index < 32 THEN 1 END) as caution_count,
-                COUNT(CASE WHEN heat_index >= 32 AND heat_index < 41 THEN 1 END) as extreme_count,
-                COUNT(CASE WHEN heat_index >= 41 AND heat_index <= 54 THEN 1 END) as danger_count
-            FROM climate_logs
-            WHERE room_name = %s AND button_pressed = 1
-            AND id NOT IN (
-                SELECT id FROM climate_logs WHERE room_name = %s ORDER BY timestamp DESC LIMIT 1
-            );
-        ''', (room_name, room_name))
-        
-        counts = cur.fetchone()
-        
-        # หักยอดออกจากตารางสถิติปุ่มกดสะสมตามจำนวนที่นับได้จริง
-        if counts:
-            if counts[0] > 0:
-                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'caution\';', (counts[0],))
-            if counts[1] > 0:
-                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'extreme_caution\';', (counts[1],))
-            if counts[2] > 0:
-                cur.execute('UPDATE button_stats SET click_count = GREATEST(0, click_count - %s) WHERE category = \'danger\';', (counts[2],))
-
-        # 🟢 สั่งลบข้อมูลประวัติโดยล็อกชื่อห้องใน Subquery ให้ถูกต้อง
+        # 🟢 สเต็ปที่ 1: สั่งลบข้อมูลประวัติของห้องนี้ (เหลือตัวล่าสุดไว้ 1 ตัวตามเดิม)
         cur.execute('''
             DELETE FROM climate_logs 
             WHERE room_name = %s 
@@ -269,11 +245,32 @@ def delete_room_data():
             );
         ''', (room_name, room_name))
         
+        # 🟢 สเต็ปที่ 2: ล้างกระดานสถิติปุ่มกดเก่าในตารางสะสมให้กลับเป็น 0 ทั้งหมดก่อน
+        cur.execute("UPDATE button_stats SET click_count = 0;")
+        
+        # 🟢 สเต็ปที่ 3: กวาดนับจำนวนปุ่มกด (button_pressed = 1) ที่เหลือรอดอยู่จริงๆ "จากทุกห้อง" ในตารางปัจจุบัน
+        cur.execute('''
+            SELECT 
+                COUNT(CASE WHEN heat_index >= 27 AND heat_index < 32 THEN 1 END) as caution_count,
+                COUNT(CASE WHEN heat_index >= 32 AND heat_index < 41 THEN 1 END) as extreme_count,
+                COUNT(CASE WHEN heat_index >= 41 AND heat_index <= 54 THEN 1 END) as danger_count
+            FROM climate_logs
+            WHERE button_pressed = 1;
+        ''')
+        
+        current_alive_counts = cur.fetchone()
+        
+        # 🟢 สเต็ปที่ 4: อัปเดตยอดที่นับได้จริงในปัจจุบันลงไปแทนที่ค่าวัดเดิม
+        if current_alive_counts:
+            cur.execute("UPDATE button_stats SET click_count = %s WHERE category = 'caution';", (current_alive_counts[0],))
+            cur.execute("UPDATE button_stats SET click_count = %s WHERE category = 'extreme_caution';", (current_alive_counts[1],))
+            cur.execute("UPDATE button_stats SET click_count = %s WHERE category = 'danger';", (current_alive_counts[2],))
+
         conn.commit()
         cur.close()
         
-        print(f"🧹 [Database] Cleared history for {room_name} and fixed button stats correctly.")
-        return jsonify({"status": "success", "message": "Cleared history and recalculated stats"}), 200
+        print(f"🧹 [Database] Recalculated all button stats from existing logs after deleting {room_name}")
+        return jsonify({"status": "success", "message": "History cleared and stats recalculated successfully"}), 200
         
     except Exception as e:
         if conn: conn.rollback()
