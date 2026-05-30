@@ -167,21 +167,29 @@ def calculate_noaa_heat_index(temp_c, humidity):
 
 @app.route('/api/get_data', methods=['GET'])
 def get_data():
-    """🟢 4. พาร์ทส่งข้อมูลออกไปแสดงผลบนแดชบอร์ด (ควบรวมดึงค่าประวัติและเรียลไทม์ผ่าน SQL)"""
+    conn = None
     try:
+        selected_room = request.args.get('room')
         conn = get_db_connection()
-        # แปลงข้อมูลคืนกลับออกมาเป็นแบบ Dictionary อัตโนมัติ
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        # 4.1 ดึงข้อมูลประวัติทั้งหมด เรียงลำดับจากเก่าไปใหม่เพื่อใช้ลากพล็อตเทรนด์กราฟเส้น
-        cur.execute('''
-            SELECT to_char(timestamp, 'HH24:MI') as time_str, temperature, humidity, heat_index 
-            FROM climate_logs 
-            ORDER BY timestamp ASC;
-        ''')
+        # 1. ดึงประวัติกราฟเส้น (แยกตามห้องที่เลือก)
+        if selected_room:
+            cur.execute('''
+                SELECT to_char(timestamp, 'HH24:MI') as time_str, temperature, humidity, heat_index 
+                FROM climate_logs 
+                WHERE room_name = %s
+                ORDER BY timestamp ASC;
+            ''', (selected_room,))
+        else:
+            cur.execute('''
+                SELECT to_char(timestamp, 'HH24:MI') as time_str, temperature, humidity, heat_index 
+                FROM climate_logs 
+                ORDER BY timestamp ASC;
+            ''')
         logs = cur.fetchall()
 
-        # 4.2 ดึงเฉพาะข้อมูลแถวล่าสุดของแต่ละห้อง (DISTINCT ON) เพื่อเอามาใช้วาดกล่องสถานะเรียลไทม์บนหน้าบอร์ด
+        # 2. ดึงข้อมูลล่าสุดของการ์ดแต่ละห้อง
         cur.execute('''
             SELECT DISTINCT ON (room_name) room_name, temperature, humidity, heat_index
             FROM climate_logs
@@ -189,24 +197,36 @@ def get_data():
         ''')
         latest_rows = cur.fetchall()
 
-        # 4.3 ดึงข้อมูลยอดสถิติปุ่มกดอึดอัด
-        cur.execute('SELECT category, click_count FROM button_stats;')
-        stats_rows = cur.fetchall()
+        # 🟢 3. ล็อกเป้าแก้บั๊ก: คำนวณยอดรวมการกดปุ่ม "สดๆ ทันทีจากตารางประวัติจริง"
+        # วิธีนี้ต่อให้ไปแก้ฐานข้อมูล ลบข้อมูล หรือเพิ่มข้อมูล กราฟแท่งจะอัปเดตตามทันที!
+        cur.execute('''
+            SELECT 
+                COUNT(CASE WHEN heat_index >= 27 AND heat_index < 32 THEN 1 END) as caution,
+                COUNT(CASE WHEN heat_index >= 32 AND heat_index < 41 THEN 1 END) as extreme_caution,
+                COUNT(CASE WHEN heat_index >= 41 AND heat_index <= 54 THEN 1 END) as danger
+            FROM climate_logs
+            WHERE button_pressed = 1;
+        ''')
+        live_stats = cur.fetchone()
 
         cur.close()
-        conn.close()
+        
 
-        # 🛠️ 4.4 ประกอบร่างโครงสร้างข้อมูลให้เหมือนโครงสร้างเดิมของหน้าแดชบอร์ดเป๊ะๆ
+        # 4. ประกอบโครงสร้างข้อมูลเพื่อส่งกลับไปที่หน้าเว็บ
         response_data = {
             "latest": {},
             "chart_timeline": [log['time_str'] for log in logs],
             "chart_temp": [log['temperature'] for log in logs],
             "chart_humi": [log['humidity'] for log in logs],
             "chart_hi": [log['heat_index'] for log in logs],
-            "button_stats": {"caution": 0, "extreme_caution": 0, "danger": 0}
+            # 🟢 ดึงข้อมูลสถิติสดที่นับได้จริงเมื่อครู่นี้ใส่เข้าไปแทนตารางเก่า
+            "button_stats": {
+                "caution": live_stats['caution'] if live_stats and live_stats['caution'] else 0,
+                "extreme_caution": live_stats['extreme_caution'] if live_stats and live_stats['extreme_caution'] else 0,
+                "danger": live_stats['danger'] if live_stats and live_stats['danger'] else 0
+            }
         }
 
-        # ยัดข้อมูลเรียลไทม์รายห้อง
         for r in latest_rows:
             response_data["latest"][r['room_name']] = {
                 "temp": r['temperature'],
@@ -214,14 +234,14 @@ def get_data():
                 "hi": r['heat_index']
             }
 
-        # ยัดยอดปุ่มกดสะสม
-        for s in stats_rows:
-            response_data["button_stats"][s['category']] = s['click_count']
-
         return jsonify(response_data), 200
 
     except Exception as e:
+        print(f"❌ [Get Data Error]: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 @app.route('/api/delete_room_data', methods=['DELETE'])
 def delete_room_data():
